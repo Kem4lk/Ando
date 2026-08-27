@@ -48,3 +48,33 @@ jobs:
             --title "Ando debug APK (run ${{ github.run_number }})" \
             --notes "Automated debug build from ${{ github.sha }}." \
             --prerelease
+
+      - name: Publish APK as base64 chunks on a dedicated branch
+        # The Actions artifact and release-asset download URLs redirect to hosts
+        # that aren't reachable from every fetcher. Committing small text chunks
+        # to a git branch means the APK can be reassembled via the plain GitHub
+        # Contents API instead, which has no such redirect.
+        run: |
+          set -e
+          apk="app/build/outputs/apk/debug/app-debug.apk"
+          sha256=$(sha256sum "$apk" | awk '{print $1}')
+
+          rm -rf /tmp/apk-publish
+          mkdir -p /tmp/apk-publish/apk-parts
+          base64 -w0 "$apk" > /tmp/apk.b64
+          split -b 1000000 -d -a 3 /tmp/apk.b64 /tmp/apk-publish/apk-parts/part_
+          parts=$(ls /tmp/apk-publish/apk-parts | wc -l)
+
+          cat > /tmp/apk-publish/manifest.json <<EOF
+          {"run_number": ${{ github.run_number }}, "sha256": "$sha256", "parts": $parts, "filename": "ando-debug.apk"}
+          EOF
+
+          cd /tmp/apk-publish
+          git init -q
+          git checkout -q -b apk-latest
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "Publish APK build ${{ github.run_number }} ($parts parts)"
+          git remote add origin "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git"
+          git push -q -f origin apk-latest
