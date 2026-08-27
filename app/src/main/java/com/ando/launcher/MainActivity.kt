@@ -17,7 +17,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -44,6 +46,7 @@ import com.ando.launcher.data.DummyData
 import com.ando.launcher.model.AppEntry
 import com.ando.launcher.model.RecentItem
 import com.ando.launcher.ui.theme.AndoOnSurfaceMuted
+import com.ando.launcher.ui.theme.AndoSurface
 import com.ando.launcher.ui.theme.AndoSurfaceVariant
 import com.ando.launcher.ui.theme.AndoTheme
 import java.text.SimpleDateFormat
@@ -105,11 +108,20 @@ private fun AppCard(app: AppEntry) {
         Column(modifier = Modifier.padding(16.dp)) {
             AppCardHeader(app)
             if (expanded) {
-                Column(
-                    modifier = Modifier.padding(top = 12.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    app.recent.forEach { item -> RecentRow(item) }
+                if (app.isGallery) {
+                    LazyRow(
+                        modifier = Modifier.padding(top = 12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        items(app.recent, key = { it.title }) { item -> GalleryItemCard(item) }
+                    }
+                } else {
+                    Column(
+                        modifier = Modifier.padding(top = 12.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        app.recent.forEach { item -> RecentItemCard(item) }
+                    }
                 }
             }
         }
@@ -155,9 +167,17 @@ private fun AppCardHeader(app: AppEntry) {
     }
 }
 
+/** A single piece of recent content, rendered as its own small card. */
 @Composable
-private fun RecentRow(item: RecentItem) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
+private fun RecentItemCard(item: RecentItem) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(AndoSurface)
+            .padding(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
         if (item.thumbTint != null) {
             Box(
                 modifier = Modifier
@@ -217,6 +237,43 @@ private fun RecentRow(item: RecentItem) {
                     Text(text = item.badge, color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
                 }
             }
+        }
+    }
+}
+
+/** A gallery thumbnail card for image-forward apps (Photos, Camera) — sits in a horizontally scrolling row. */
+@Composable
+private fun GalleryItemCard(item: RecentItem) {
+    Column(
+        modifier = Modifier
+            .width(112.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(AndoSurface)
+            .padding(8.dp),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(1f)
+                .clip(RoundedCornerShape(10.dp))
+                .background(item.thumbTint ?: AndoSurfaceVariant),
+        )
+        Column(modifier = Modifier.padding(top = 8.dp)) {
+            Text(
+                text = item.title,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurface,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = item.meta,
+                style = MaterialTheme.typography.labelSmall,
+                color = AndoOnSurfaceMuted,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
     }
 }

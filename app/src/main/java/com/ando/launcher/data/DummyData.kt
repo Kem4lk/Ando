@@ -47,7 +47,10 @@ object DummyData {
                 RecentItem("42 new photos", "Kadıköy waterfront walk", "Today", thumbTint = Color(0xFFEA4335)),
                 RecentItem("Screen recording", "0:38 · saved from Chrome", "Yesterday", thumbTint = Color(0xFF4285F4)),
                 RecentItem("Shared album", "\"Yaz 2026\" · 6 people", "2d ago", thumbTint = Color(0xFFFBBC05)),
+                RecentItem("Beach sunset", "Bodrum", "3d ago", thumbTint = Color(0xFFFF8A65)),
+                RecentItem("Coffee & code", "Home office", "5d ago", thumbTint = Color(0xFF9575CD)),
             ),
+            isGallery = true,
         ),
         AppEntry(
             id = "chrome",
@@ -191,7 +194,10 @@ object DummyData {
                 RecentItem("IMG_2618.jpg", "4032×3024 · Portrait", "12m", thumbTint = Color(0xFF6C63FF)),
                 RecentItem("VID_0091.mp4", "0:24 · 1080p", "1h", thumbTint = Color(0xFF00BFA5)),
                 RecentItem("IMG_2601.jpg", "Panorama", "yesterday", thumbTint = Color(0xFFFF8A65)),
+                RecentItem("IMG_2588.jpg", "Night mode", "2d ago", thumbTint = Color(0xFF4E5D6C)),
+                RecentItem("IMG_2570.jpg", "Macro · flower", "3d ago", thumbTint = Color(0xFF66BB6A)),
             ),
+            isGallery = true,
         ),
         AppEntry(
             id = "calendar",

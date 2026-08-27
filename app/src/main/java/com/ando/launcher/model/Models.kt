@@ -20,4 +20,6 @@ data class AppEntry(
     val accent: Color,
     val recentLabel: String,
     val recent: List<RecentItem>,
+    /** Image-forward apps (Photos, Camera) render their feed as a horizontally scrolling gallery. */
+    val isGallery: Boolean = false,
 )
