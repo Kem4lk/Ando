@@ -28,7 +28,7 @@ jobs:
         run: chmod +x gradlew
 
       - name: Build debug APK
-        run: ./gradlew assembleDebug --stacktrace
+        run: ./gradlew assembleDebug --stacktrace "-PciBuildNumber=${{ github.run_number }}"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
@@ -42,10 +42,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           tag="apk-${{ github.run_id }}"
-          cp app/build/outputs/apk/debug/app-debug.apk "ando-${{ github.run_number }}.apk"
-          gh release create "$tag" "ando-${{ github.run_number }}.apk" \
+          version="1.0.${{ github.run_number }}"
+          apkName="ando-v${version}.apk"
+          cp app/build/outputs/apk/debug/app-debug.apk "$apkName"
+          gh release create "$tag" "$apkName" \
             --repo "${{ github.repository }}" \
-            --title "Ando debug APK (run ${{ github.run_number }})" \
+            --title "Ando v${version} (debug)" \
             --notes "Automated debug build from ${{ github.sha }}." \
             --prerelease
 
@@ -57,6 +59,8 @@ jobs:
         run: |
           set -e
           apk="app/build/outputs/apk/debug/app-debug.apk"
+          version="1.0.${{ github.run_number }}"
+          filename="ando-v${version}.apk"
           sha256=$(sha256sum "$apk" | awk '{print $1}')
 
           rm -rf /tmp/apk-publish
@@ -66,7 +70,7 @@ jobs:
           parts=$(ls /tmp/apk-publish/apk-parts | wc -l)
 
           cat > /tmp/apk-publish/manifest.json <<EOF
-          {"run_number": ${{ github.run_number }}, "sha256": "$sha256", "parts": $parts, "filename": "ando-debug.apk"}
+          {"run_number": ${{ github.run_number }}, "version": "$version", "sha256": "$sha256", "parts": $parts, "filename": "$filename"}
           EOF
 
           cd /tmp/apk-publish

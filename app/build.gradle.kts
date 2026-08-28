@@ -3,6 +3,10 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+// CI passes -PciBuildNumber=<run number> so every build gets its own, ever-increasing
+// version — makes it obvious which APK on the phone is actually newest.
+val ciBuildNumber = (project.findProperty("ciBuildNumber") as String?)?.toIntOrNull() ?: 0
+
 android {
     namespace = "com.ando.launcher"
     compileSdk = 34
@@ -11,8 +15,8 @@ android {
         applicationId = "com.ando.launcher"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = if (ciBuildNumber > 0) ciBuildNumber else 1
+        versionName = if (ciBuildNumber > 0) "1.0.$ciBuildNumber" else "1.0-dev"
     }
 
     buildTypes {

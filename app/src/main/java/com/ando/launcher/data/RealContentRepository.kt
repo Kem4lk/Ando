@@ -424,6 +424,19 @@ class RealContentRepository(private val context: Context) {
         val items = mutableListOf<RecentItem>()
 
         runCatching {
+            val info = packageManager.getPackageInfo(context.packageName, 0)
+            val versionCode = if (Build.VERSION.SDK_INT >= 28) info.longVersionCode else @Suppress("DEPRECATION") info.versionCode.toLong()
+            items += RecentItem(
+                title = "Ando",
+                subtitle = "Sürüm ${info.versionName}",
+                meta = "build $versionCode",
+                onClick = {
+                    safeStart(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + context.packageName)))
+                },
+            )
+        }
+
+        runCatching {
             val batteryIntent = context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
             val level = batteryIntent?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
             val scale = batteryIntent?.getIntExtra(BatteryManager.EXTRA_SCALE, -1) ?: -1
