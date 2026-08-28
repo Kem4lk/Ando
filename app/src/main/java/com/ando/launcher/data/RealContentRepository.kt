@@ -6,10 +6,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
-import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import android.graphics.Canvas
-import android.graphics.drawable.Drawable
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.net.Uri
@@ -30,6 +27,7 @@ import com.ando.launcher.model.RecentItem
 import com.ando.launcher.model.SourceKind
 import com.ando.launcher.notifications.CapturedNotification
 import com.ando.launcher.notifications.NotificationStore
+import com.ando.launcher.util.toImageBitmap
 import java.util.concurrent.TimeUnit
 
 /** Sentinel stored in [AppEntry.missingPermission] for the notification-access special permission
@@ -113,7 +111,7 @@ class RealContentRepository(private val context: Context) {
     private fun realAppIdentity(packageName: String, fallbackName: String): Pair<String, ImageBitmap?> = runCatching {
         val appInfo = packageManager.getApplicationInfo(packageName, 0)
         val label = packageManager.getApplicationLabel(appInfo).toString()
-        val icon = drawableToImageBitmap(packageManager.getApplicationIcon(appInfo))
+        val icon = packageManager.getApplicationIcon(appInfo).toImageBitmap()
         label to icon
     }.getOrDefault(fallbackName to null)
 
@@ -373,13 +371,5 @@ class RealContentRepository(private val context: Context) {
             days < 7 -> "$prefix$days gün$suffix"
             else -> "$prefix${days / 7} hf$suffix"
         }
-    }
-
-    private fun drawableToImageBitmap(drawable: Drawable, sizePx: Int = 128): ImageBitmap {
-        val bitmap = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888)
-        val canvas = Canvas(bitmap)
-        drawable.setBounds(0, 0, sizePx, sizePx)
-        drawable.draw(canvas)
-        return bitmap.asImageBitmap()
     }
 }

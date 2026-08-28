@@ -4,18 +4,24 @@ import android.content.Intent
 import android.os.Bundle
 import android.provider.Settings
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -24,6 +30,9 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items as gridItems
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Card
@@ -36,17 +45,21 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.ando.launcher.data.ALL_RUNTIME_PERMISSIONS
+import com.ando.launcher.data.AllAppsRepository
+import com.ando.launcher.data.LauncherApp
 import com.ando.launcher.data.NOTIFICATION_ACCESS
 import com.ando.launcher.data.RealContentRepository
 import com.ando.launcher.model.AppEntry
@@ -60,6 +73,7 @@ import com.ando.launcher.ui.theme.AndoTheme
 class MainActivity : ComponentActivity() {
 
     private lateinit var repository: RealContentRepository
+    private lateinit var allAppsRepository: AllAppsRepository
     private val refreshTick = mutableStateOf(0)
 
     private val permissionLauncher =
@@ -71,6 +85,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         repository = RealContentRepository(applicationContext)
+        allAppsRepository = AllAppsRepository(applicationContext)
         NotificationStore.loadFromDisk(applicationContext)
         permissionLauncher.launch(ALL_RUNTIME_PERMISSIONS.toTypedArray())
 
@@ -82,11 +97,54 @@ class MainActivity : ComponentActivity() {
                 val notificationAccessEnabled = remember(tick, notificationSnapshot) {
                     repository.isNotificationAccessEnabled()
                 }
-                LauncherScreen(
-                    apps = apps,
-                    showNotificationBanner = !notificationAccessEnabled,
-                    onGrantPermission = { permission -> requestPermission(permission) },
-                )
+                val allApps = remember(tick) { allAppsRepository.loadAll() }
+                var drawerOpen by remember { mutableStateOf(false) }
+
+                BackHandler(enabled = drawerOpen) { drawerOpen = false }
+
+                Box(modifier = Modifier.fillMaxSize()) {
+                    LauncherScreen(
+                        apps = apps,
+                        showNotificationBanner = !notificationAccessEnabled,
+                        onGrantPermission = { permission -> requestPermission(permission) },
+                    )
+
+                    // Edge-swipe zone: drag right from the left edge to reveal the all-apps drawer.
+                    if (!drawerOpen) {
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.CenterStart)
+                                .fillMaxHeight()
+                                .width(24.dp)
+                                .pointerInput(Unit) {
+                                    var totalDrag = 0f
+                                    detectHorizontalDragGestures(
+                                        onDragStart = { totalDrag = 0f },
+                                        onHorizontalDrag = { change, dragAmount ->
+                                            totalDrag += dragAmount
+                                            if (totalDrag > 80f) drawerOpen = true
+                                            change.consume()
+                                        },
+                                    )
+                                },
+                        )
+                    }
+
+                    AnimatedVisibility(
+                        visible = drawerOpen,
+                        enter = slideInHorizontally(initialOffsetX = { -it }),
+                        exit = slideOutHorizontally(targetOffsetX = { -it }),
+                    ) {
+                        AllAppsDrawer(
+                            apps = allApps,
+                            onLaunch = { app ->
+                                allAppsRepository.launch(app)
+                                drawerOpen = false
+                            },
+                            onClose = { drawerOpen = false },
+                        )
+                    }
+                }
             }
         }
     }
@@ -324,6 +382,81 @@ private fun RecentItemCard(item: RecentItem) {
                 }
             }
         }
+    }
+}
+
+/** Full-screen drawer listing every launchable app on the device. Swipe left, or use back, to close it. */
+@Composable
+private fun AllAppsDrawer(apps: List<LauncherApp>, onLaunch: (LauncherApp) -> Unit, onClose: () -> Unit) {
+    Surface(
+        modifier = Modifier
+            .fillMaxSize()
+            .pointerInput(Unit) {
+                var totalDrag = 0f
+                detectHorizontalDragGestures(
+                    onDragStart = { totalDrag = 0f },
+                    onHorizontalDrag = { change, dragAmount ->
+                        totalDrag += dragAmount
+                        if (totalDrag < -80f) onClose()
+                        change.consume()
+                    },
+                )
+            },
+        color = MaterialTheme.colorScheme.background,
+    ) {
+        Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
+            ) {
+                Text(
+                    text = "Tüm uygulamalar",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.weight(1f),
+                )
+                Text(
+                    text = "Kapat",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.clickable { onClose() }.padding(8.dp),
+                )
+            }
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(4),
+                verticalArrangement = Arrangement.spacedBy(18.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                gridItems(apps, key = { it.packageName }) { app -> AppDrawerItem(app, onLaunch) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AppDrawerItem(app: LauncherApp, onLaunch: (LauncherApp) -> Unit) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .clickable { onLaunch(app) }
+            .padding(vertical = 8.dp),
+    ) {
+        Image(
+            bitmap = app.icon,
+            contentDescription = app.label,
+            modifier = Modifier.size(52.dp).clip(RoundedCornerShape(14.dp)),
+        )
+        Text(
+            text = app.label,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(top = 6.dp),
+        )
     }
 }
 
