@@ -65,7 +65,9 @@ import com.ando.launcher.data.NOTIFICATION_ACCESS
 import com.ando.launcher.data.RealContentRepository
 import com.ando.launcher.model.AppEntry
 import com.ando.launcher.model.CardAction
+import com.ando.launcher.model.ContactAvatar
 import com.ando.launcher.model.RecentItem
+import com.ando.launcher.notifications.MediaHistoryStore
 import com.ando.launcher.notifications.NotificationStore
 import com.ando.launcher.ui.theme.AndoOnSurfaceMuted
 import com.ando.launcher.ui.theme.AndoSurface
@@ -89,13 +91,15 @@ class MainActivity : ComponentActivity() {
         repository = RealContentRepository(applicationContext)
         allAppsRepository = AllAppsRepository(applicationContext)
         NotificationStore.loadFromDisk(applicationContext)
+        MediaHistoryStore.loadFromDisk(applicationContext)
         permissionLauncher.launch(ALL_RUNTIME_PERMISSIONS.toTypedArray())
 
         setContent {
             AndoTheme {
                 val tick by refreshTick
                 val notificationSnapshot by NotificationStore.byPackage.collectAsState()
-                val apps = remember(tick, notificationSnapshot) { repository.buildApps() }
+                val mediaSnapshot by MediaHistoryStore.byPackage.collectAsState()
+                val apps = remember(tick, notificationSnapshot, mediaSnapshot) { repository.buildApps() }
                 val notificationAccessEnabled = remember(tick, notificationSnapshot) {
                     repository.isNotificationAccessEnabled()
                 }
@@ -222,9 +226,18 @@ private fun AppCard(app: AppEntry, onGrantPermission: (String) -> Unit) {
         Column(modifier = Modifier.padding(16.dp)) {
             AppCardHeader(app)
             when {
+                app.actionButtons.isNotEmpty() -> ActionButtonsRow(
+                    modifier = Modifier.padding(top = 12.dp),
+                    actions = app.actionButtons,
+                    accent = app.accent,
+                )
                 app.missingPermission != null -> GrantPermissionRow(
                     modifier = Modifier.padding(top = 12.dp),
                     onClick = { onGrantPermission(app.missingPermission) },
+                )
+                app.compactStats -> CompactStatsRow(
+                    modifier = Modifier.padding(top = 12.dp),
+                    items = app.recent,
                 )
                 app.recent.isEmpty() -> Text(
                     text = app.recentLabel,
@@ -244,6 +257,9 @@ private fun AppCard(app: AppEntry, onGrantPermission: (String) -> Unit) {
                 ) {
                     app.recent.forEach { item -> RecentItemCard(item) }
                 }
+            }
+            if (app.contactsStrip.isNotEmpty()) {
+                ContactsStripRow(modifier = Modifier.padding(top = 12.dp), contacts = app.contactsStrip)
             }
         }
     }
@@ -266,6 +282,109 @@ private fun GrantPermissionRow(modifier: Modifier = Modifier, onClick: () -> Uni
             color = MaterialTheme.colorScheme.primary,
             fontWeight = FontWeight.SemiBold,
         )
+    }
+}
+
+/** Camera's body: big Photo/Video buttons instead of a thumbnail list. */
+@Composable
+private fun ActionButtonsRow(modifier: Modifier = Modifier, actions: List<CardAction>, accent: Color) {
+    Row(modifier = modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        actions.forEach { action ->
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(AndoSurface)
+                    .clickable { action.onClick() }
+                    .padding(vertical = 16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Icon(imageVector = action.icon, contentDescription = action.label, tint = accent, modifier = Modifier.size(26.dp))
+                Text(
+                    text = action.label,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier.padding(top = 6.dp),
+                )
+            }
+        }
+    }
+}
+
+/** Device status's body: a single compact row of small stat chips instead of stacked cards. */
+@Composable
+private fun CompactStatsRow(modifier: Modifier = Modifier, items: List<RecentItem>) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(AndoSurface)
+            .padding(vertical = 10.dp),
+        horizontalArrangement = Arrangement.SpaceEvenly,
+    ) {
+        items.forEach { item ->
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(10.dp))
+                    .then(if (item.onClick != null) Modifier.clickable { item.onClick.invoke() } else Modifier)
+                    .padding(horizontal = 10.dp, vertical = 2.dp),
+            ) {
+                Text(text = item.meta, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.SemiBold)
+                Text(
+                    text = item.title,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AndoOnSurfaceMuted,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(top = 2.dp),
+                )
+            }
+        }
+    }
+}
+
+/** WhatsApp's "en sık yazışılanlar" — a horizontally scrollable row of contact avatars. */
+@Composable
+private fun ContactsStripRow(modifier: Modifier = Modifier, contacts: List<ContactAvatar>) {
+    LazyRow(modifier = modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        items(contacts, key = { it.name }) { contact ->
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.width(60.dp).clickable { contact.onClick() },
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(48.dp)
+                        .clip(CircleShape)
+                        .background(AndoSurface),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    if (contact.avatar != null) {
+                        Image(
+                            bitmap = contact.avatar,
+                            contentDescription = contact.name,
+                            modifier = Modifier.size(48.dp).clip(CircleShape),
+                        )
+                    } else {
+                        Text(
+                            text = contact.name.take(1).uppercase(),
+                            color = AndoOnSurfaceMuted,
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
+                }
+                Text(
+                    text = contact.name,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AndoOnSurfaceMuted,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(top = 4.dp),
+                )
+            }
+        }
     }
 }
 

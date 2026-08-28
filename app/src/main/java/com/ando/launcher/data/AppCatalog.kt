@@ -34,6 +34,9 @@ object AppCatalog {
     val trackedNotificationPackages: Set<String> =
         notificationApps.flatMap { it.packageCandidates }.toSet()
 
+    /** Packages whose MediaSession playback we track for a real "recently played" history. */
+    val trackedMediaPackages: Set<String> = setOf("com.spotify.music")
+
     private val byId = notificationApps.associateBy { it.id }
 
     val photos = CatalogEntry("photos", "Google Photos", R.drawable.icon_photos, Color(0xFF4285F4), SourceKind.MEDIA_PHOTOS)
@@ -41,6 +44,7 @@ object AppCatalog {
     val calendar = CatalogEntry("calendar", "Calendar", R.drawable.icon_calendar, Color(0xFFEA4335), SourceKind.CALENDAR, listOf("com.google.android.calendar"))
     val phone = CatalogEntry("phone", "Phone", R.drawable.icon_phone, Color(0xFF34A853), SourceKind.CALL_LOG)
     val messages = CatalogEntry("messages", "Messages", R.drawable.icon_messages, Color(0xFF1A73E8), SourceKind.SMS, listOf("com.google.android.apps.messaging"))
+    val files = CatalogEntry("files", "Dosyalar", R.drawable.icon_orange, Color(0xFFFF7A1A), SourceKind.FILES)
     val deviceStatus = CatalogEntry("device", "Device status", R.drawable.icon_settings, Color(0xFF5F6368), SourceKind.DEVICE_STATUS)
 
     /** Full card order, top to bottom. */
@@ -49,6 +53,7 @@ object AppCatalog {
         photos, camera,
         byId.getValue("chrome"), byId.getValue("spotify"), byId.getValue("mail"),
         byId.getValue("maps"), byId.getValue("chatgpt"),
+        files,
         deviceStatus,
         byId.getValue("reddit"), messages, phone, byId.getValue("x"),
         calendar,

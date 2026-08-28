@@ -2,6 +2,7 @@ package com.ando.launcher.notifications
 
 import android.app.PendingIntent
 import android.content.Context
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.core.content.edit
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -13,19 +14,22 @@ data class CapturedNotification(
     val title: String,
     val text: String,
     val whenMillis: Long,
-    /** Tapping through to the exact chat/screen the notification pointed at — only ever set
-     *  for notifications captured live in this process, never restored from disk. */
+    /** Tapping through to the exact chat/screen the notification pointed at, and the sender's
+     *  avatar if the notification carried one — only ever set for notifications captured live
+     *  in this process, never restored from disk. */
     val contentIntent: PendingIntent? = null,
+    val avatar: ImageBitmap? = null,
 )
 
 /**
- * Small on-disk log of the last few notifications per tracked package, written by
+ * On-disk log of the last notifications per tracked package, written by
  * [AndoNotificationListenerService] and read by the launcher UI. Nothing here ever
- * leaves the device.
+ * leaves the device. Kept generous enough (well beyond what a card displays) that
+ * "most talked to" frequency stats (see WhatsApp's contact strip) mean something.
  */
 object NotificationStore {
     private const val PREFS = "ando_notifications"
-    private const val MAX_PER_PACKAGE = 6
+    private const val MAX_PER_PACKAGE = 40
 
     /** In-memory mirror so the UI can react immediately without re-reading disk. */
     private val _byPackage = MutableStateFlow<Map<String, List<CapturedNotification>>>(emptyMap())
@@ -48,11 +52,12 @@ object NotificationStore {
         text: String,
         whenMillis: Long,
         contentIntent: PendingIntent? = null,
+        avatar: ImageBitmap? = null,
     ) {
         if (title.isBlank() && text.isBlank()) return
         val updated = (
             _byPackage.value[packageName].orEmpty() +
-                CapturedNotification(title, text, whenMillis, contentIntent)
+                CapturedNotification(title, text, whenMillis, contentIntent, avatar)
             )
             .sortedByDescending { it.whenMillis }
             .take(MAX_PER_PACKAGE)

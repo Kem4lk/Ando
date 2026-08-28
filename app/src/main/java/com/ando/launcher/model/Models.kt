@@ -14,6 +14,7 @@ enum class SourceKind {
     CALENDAR,
     CALL_LOG,
     SMS,
+    FILES,
     /** Battery / storage / network — read directly, no special permission. */
     DEVICE_STATUS,
 }
@@ -38,6 +39,14 @@ data class RecentItem(
     val onClick: (() -> Unit)? = null,
 )
 
+/** One contact's avatar in a "most talked to" strip, built from locally accumulated notification history. */
+data class ContactAvatar(
+    val name: String,
+    val avatar: ImageBitmap?,
+    val count: Int,
+    val onClick: () -> Unit,
+)
+
 /** One app tile on the launcher, sourced from a real, on-device signal. */
 data class AppEntry(
     val id: String,
@@ -57,4 +66,10 @@ data class AppEntry(
     val onOpen: (() -> Unit)? = null,
     /** The card's top-right quick action. */
     val primaryAction: CardAction? = null,
+    /** A horizontally scrollable row of "most talked to" contacts (WhatsApp). */
+    val contactsStrip: List<ContactAvatar> = emptyList(),
+    /** A row of big action buttons shown instead of a content list (Camera's Photo/Video). */
+    val actionButtons: List<CardAction> = emptyList(),
+    /** Renders [recent] as a single compact stat strip instead of stacked cards (Device status). */
+    val compactStats: Boolean = false,
 )

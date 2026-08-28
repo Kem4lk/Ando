@@ -26,28 +26,38 @@ import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.ChatBubble
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings as SettingsIcon
 import androidx.compose.material.icons.filled.TrendingUp
+import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
+import android.webkit.MimeTypeMap
 import com.ando.launcher.model.AppEntry
 import com.ando.launcher.model.CardAction
+import com.ando.launcher.model.ContactAvatar
 import com.ando.launcher.model.RecentItem
 import com.ando.launcher.model.SourceKind
 import com.ando.launcher.notifications.CapturedNotification
+import com.ando.launcher.notifications.MediaHistoryStore
 import com.ando.launcher.notifications.NotificationStore
 import com.ando.launcher.util.toImageBitmap
+import java.io.File
 import java.util.concurrent.TimeUnit
 
 /** Sentinel stored in [AppEntry.missingPermission] for the notification-access special permission
  *  (it isn't a normal runtime permission, so it can't be requested the usual way). */
 const val NOTIFICATION_ACCESS = "notification_access"
+
+/** Sentinel for the "All files access" special permission the Files card needs on Android 11+. */
+const val MANAGE_STORAGE_ACCESS = "manage_storage_access"
 
 /** Every runtime permission any card might need — requested together on first launch. */
 val ALL_RUNTIME_PERMISSIONS: List<String> = buildList {
@@ -82,11 +92,12 @@ class RealContentRepository(private val context: Context) {
     private fun buildEntry(entry: CatalogEntry, notifications: Map<String, List<CapturedNotification>>): AppEntry? =
         when (entry.source) {
             SourceKind.NOTIFICATIONS -> buildNotificationEntry(entry, notifications)
-            SourceKind.MEDIA_PHOTOS -> buildMediaEntry(entry, cameraOnly = false)
-            SourceKind.MEDIA_CAMERA -> buildMediaEntry(entry, cameraOnly = true)
+            SourceKind.MEDIA_PHOTOS -> buildPhotosEntry(entry)
+            SourceKind.MEDIA_CAMERA -> buildCameraEntry(entry)
             SourceKind.CALENDAR -> buildCalendarEntry(entry)
             SourceKind.CALL_LOG -> buildCallLogEntry(entry)
             SourceKind.SMS -> buildSmsEntry(entry)
+            SourceKind.FILES -> buildFilesEntry(entry)
             SourceKind.DEVICE_STATUS -> buildDeviceStatusEntry(entry)
         }
 
@@ -107,8 +118,15 @@ class RealContentRepository(private val context: Context) {
             )
         }
 
+        // Spotify has no public "recently played" API — a real play history is instead built
+        // from MediaSession metadata changes (see AndoNotificationListenerService), not from notifications.
+        if (entry.id == "spotify") {
+            return buildSpotifyEntry(entry, name, iconBitmap, installedPackage, openApp, primaryAction)
+        }
+
         val captured = notifications[installedPackage].orEmpty().sortedByDescending { it.whenMillis }
-        val items = captured.map { notification ->
+        val displayLimit = if (entry.id == "telegram" || entry.id == "whatsapp") 3 else 6
+        val items = captured.take(displayLimit).map { notification ->
             RecentItem(
                 title = notification.title.ifBlank { name },
                 subtitle = notification.text,
@@ -119,10 +137,58 @@ class RealContentRepository(private val context: Context) {
                 },
             )
         }
+        val contactsStrip = if (entry.id == "whatsapp") topContacts(captured, name, openApp) else emptyList()
+
         return AppEntry(
             id = entry.id, name = name, icon = entry.fallbackIcon, iconBitmap = iconBitmap,
             accent = entry.accent,
-            recentLabel = if (items.isEmpty()) "Henüz bildirim yok" else "Son bildirimler",
+            recentLabel = if (items.isEmpty()) "Henüz bildirim yok" else "Son sohbetler",
+            recent = items, source = entry.source,
+            onOpen = openApp, primaryAction = primaryAction, contactsStrip = contactsStrip,
+        )
+    }
+
+    /** "En sık yazışılanlar" — built from how often each sender has shown up in captured
+     *  notifications, since WhatsApp exposes no contact-frequency API of its own. */
+    private fun topContacts(captured: List<CapturedNotification>, fallbackName: String, openApp: () -> Unit): List<ContactAvatar> =
+        captured.groupBy { it.title.ifBlank { fallbackName } }
+            .map { (contactName, notificationsForContact) ->
+                val latest = notificationsForContact.maxByOrNull { it.whenMillis }
+                ContactAvatar(
+                    name = contactName,
+                    avatar = notificationsForContact.firstNotNullOfOrNull { it.avatar },
+                    count = notificationsForContact.size,
+                    onClick = {
+                        val opened = latest?.contentIntent?.let { runCatching { it.send() }.isSuccess } ?: false
+                        if (!opened) openApp()
+                    },
+                )
+            }
+            .sortedByDescending { it.count }
+            .take(8)
+
+    /** Spotify's card: a real play history from MediaSession metadata, not notifications. */
+    private fun buildSpotifyEntry(
+        entry: CatalogEntry,
+        name: String,
+        iconBitmap: ImageBitmap?,
+        installedPackage: String,
+        openApp: () -> Unit,
+        primaryAction: CardAction,
+    ): AppEntry {
+        val history = MediaHistoryStore.byPackage.value[installedPackage].orEmpty()
+        val items = history.take(6).map { track ->
+            RecentItem(
+                title = track.title,
+                subtitle = track.artist,
+                meta = relativeTime(track.whenMillis),
+                onClick = openApp,
+            )
+        }
+        return AppEntry(
+            id = entry.id, name = name, icon = entry.fallbackIcon, iconBitmap = iconBitmap,
+            accent = entry.accent,
+            recentLabel = if (items.isEmpty()) "Henüz çalma geçmişi yok" else "Son çalınanlar",
             recent = items, source = entry.source,
             onOpen = openApp, primaryAction = primaryAction,
         )
@@ -174,8 +240,8 @@ class RealContentRepository(private val context: Context) {
     private val mediaPermission =
         if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_IMAGES else Manifest.permission.READ_EXTERNAL_STORAGE
 
-    private fun buildMediaEntry(entry: CatalogEntry, cameraOnly: Boolean): AppEntry {
-        val captureAction = CardAction("Çek", Icons.Filled.CameraAlt) { openCameraCapture() }
+    private fun buildPhotosEntry(entry: CatalogEntry): AppEntry {
+        val captureAction = CardAction("Çek", Icons.Filled.CameraAlt) { openCameraCapture(video = false) }
         if (!hasPermission(mediaPermission)) {
             return permissionNeededEntry(entry, mediaPermission, primaryAction = captureAction)
         }
@@ -186,15 +252,10 @@ class RealContentRepository(private val context: Context) {
             MediaStore.Images.Media.DATE_ADDED,
             MediaStore.Images.Media.BUCKET_DISPLAY_NAME,
         )
-        val (selection, args) = if (cameraOnly) {
-            "${MediaStore.Images.Media.BUCKET_DISPLAY_NAME} = ?" to arrayOf("Camera")
-        } else {
-            null to null
-        }
         runCatching {
             context.contentResolver.query(
                 MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-                projection, selection, args,
+                projection, null, null,
                 "${MediaStore.Images.Media.DATE_ADDED} DESC",
             )?.use { cursor ->
                 val idCol = cursor.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
@@ -223,28 +284,57 @@ class RealContentRepository(private val context: Context) {
         return AppEntry(
             id = entry.id, name = entry.fallbackName, icon = entry.fallbackIcon,
             accent = entry.accent,
-            recentLabel = if (items.isEmpty()) "Fotoğraf bulunamadı" else if (cameraOnly) "Son çekimler" else "Son eklenenler",
+            recentLabel = if (items.isEmpty()) "Fotoğraf bulunamadı" else "Son eklenenler",
             recent = items, source = entry.source, isGallery = true,
             onOpen = { safeStart(Intent(Intent.ACTION_VIEW, MediaStore.Images.Media.EXTERNAL_CONTENT_URI)) },
             primaryAction = captureAction,
         )
     }
 
+    /** Camera is just the shutter — a photo/video button pair, no thumbnails to keep it small. */
+    private fun buildCameraEntry(entry: CatalogEntry): AppEntry {
+        val photoAction = CardAction("Fotoğraf", Icons.Filled.CameraAlt) { openCameraCapture(video = false) }
+        val videoAction = CardAction("Video", Icons.Filled.Videocam) { openCameraCapture(video = true) }
+        return AppEntry(
+            id = entry.id, name = entry.fallbackName, icon = entry.fallbackIcon, accent = entry.accent,
+            recentLabel = "Hızlı çekim", recent = emptyList(), source = entry.source,
+            onOpen = photoAction.onClick, primaryAction = photoAction,
+            actionButtons = listOf(photoAction, videoAction),
+        )
+    }
+
     /** Opens the camera app pointed at a fresh MediaStore entry, so the shot is actually saved. */
-    private fun openCameraCapture() {
+    private fun openCameraCapture(video: Boolean) {
         runCatching {
-            val values = ContentValues().apply {
-                put(MediaStore.Images.Media.DISPLAY_NAME, "Ando_${System.currentTimeMillis()}.jpg")
-                put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
-            }
-            val uri = context.contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
-            val intent = Intent(MediaStore.ACTION_IMAGE_CAPTURE).apply {
-                if (uri != null) {
-                    putExtra(MediaStore.EXTRA_OUTPUT, uri)
-                    addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+            if (video) {
+                val values = ContentValues().apply {
+                    put(MediaStore.Video.Media.DISPLAY_NAME, "Ando_${System.currentTimeMillis()}.mp4")
+                    put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
                 }
+                val uri = context.contentResolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values)
+                safeStart(
+                    Intent(MediaStore.ACTION_VIDEO_CAPTURE).apply {
+                        if (uri != null) {
+                            putExtra(MediaStore.EXTRA_OUTPUT, uri)
+                            addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+                        }
+                    },
+                )
+            } else {
+                val values = ContentValues().apply {
+                    put(MediaStore.Images.Media.DISPLAY_NAME, "Ando_${System.currentTimeMillis()}.jpg")
+                    put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+                }
+                val uri = context.contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+                safeStart(
+                    Intent(MediaStore.ACTION_IMAGE_CAPTURE).apply {
+                        if (uri != null) {
+                            putExtra(MediaStore.EXTRA_OUTPUT, uri)
+                            addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+                        }
+                    },
+                )
             }
-            safeStart(intent)
         }
     }
 
@@ -484,7 +574,72 @@ class RealContentRepository(private val context: Context) {
             recentLabel = "Cihaz durumu", recent = items, source = entry.source,
             onOpen = { safeStart(Intent(Settings.ACTION_SETTINGS)) },
             primaryAction = CardAction("Ayarlar", Icons.Filled.SettingsIcon) { safeStart(Intent(Settings.ACTION_SETTINGS)) },
+            compactStats = true,
         )
+    }
+
+    // ---- Files (Downloads & Documents) ----
+
+    private fun buildFilesEntry(entry: CatalogEntry): AppEntry {
+        val openSettings = {
+            if (Build.VERSION.SDK_INT >= 30) {
+                safeStart(
+                    Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, Uri.parse("package:" + context.packageName)),
+                )
+            }
+        }
+        val browseAction = CardAction("Gözat", Icons.Filled.FolderOpen, openSettings)
+
+        if (Build.VERSION.SDK_INT >= 30 && !Environment.isExternalStorageManager()) {
+            return permissionNeededEntry(entry, MANAGE_STORAGE_ACCESS, onOpen = openSettings, primaryAction = browseAction)
+        }
+
+        val items = mutableListOf<RecentItem>()
+        runCatching {
+            val roots = listOf(
+                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
+                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS),
+            )
+            roots.filter { it.isDirectory }
+                .flatMap { dir -> dir.listFiles()?.filter { it.isFile } ?: emptyList() }
+                .sortedByDescending { it.lastModified() }
+                .take(6)
+                .forEach { file ->
+                    items += RecentItem(
+                        title = file.name,
+                        subtitle = humanFileSize(file.length()),
+                        meta = relativeTime(file.lastModified()),
+                        onClick = { openFile(file) },
+                    )
+                }
+        }
+        return AppEntry(
+            id = entry.id, name = entry.fallbackName, icon = entry.fallbackIcon, accent = entry.accent,
+            recentLabel = if (items.isEmpty()) "Dosya bulunamadı" else "Son dosyalar",
+            recent = items, source = entry.source,
+            onOpen = openSettings, primaryAction = browseAction,
+        )
+    }
+
+    private fun openFile(file: File) {
+        runCatching {
+            val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+            val mime = MimeTypeMap.getFileExtensionFromUrl(file.name)
+                ?.let { MimeTypeMap.getSingleton().getMimeTypeFromExtension(it) }
+                ?: "*/*"
+            safeStart(
+                Intent(Intent.ACTION_VIEW).apply {
+                    setDataAndType(uri, mime)
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                },
+            )
+        }
+    }
+
+    private fun humanFileSize(bytes: Long): String = when {
+        bytes >= 1024 * 1024 -> "%.1f MB".format(bytes / (1024.0 * 1024.0))
+        bytes >= 1024 -> "%.0f KB".format(bytes / 1024.0)
+        else -> "$bytes B"
     }
 
     // ---- shared helpers ----
