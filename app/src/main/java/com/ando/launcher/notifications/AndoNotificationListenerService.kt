@@ -33,6 +33,6 @@ class AndoNotificationListenerService : NotificationListenerService() {
         val text = extras.getCharSequence(Notification.EXTRA_TEXT)?.toString().orEmpty()
         if (title.isBlank() && text.isBlank()) return
 
-        NotificationStore.record(applicationContext, packageName, title, text, sbn.postTime)
+        NotificationStore.record(applicationContext, packageName, title, text, sbn.postTime, sbn.notification.contentIntent)
     }
 }

@@ -37,6 +37,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -63,6 +64,7 @@ import com.ando.launcher.data.LauncherApp
 import com.ando.launcher.data.NOTIFICATION_ACCESS
 import com.ando.launcher.data.RealContentRepository
 import com.ando.launcher.model.AppEntry
+import com.ando.launcher.model.CardAction
 import com.ando.launcher.model.RecentItem
 import com.ando.launcher.notifications.NotificationStore
 import com.ando.launcher.ui.theme.AndoOnSurfaceMuted
@@ -269,7 +271,14 @@ private fun GrantPermissionRow(modifier: Modifier = Modifier, onClick: () -> Uni
 
 @Composable
 private fun AppCardHeader(app: AppEntry) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .then(if (app.onOpen != null) Modifier.clickable { app.onOpen.invoke() } else Modifier)
+            .padding(4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
         Box(
             modifier = Modifier
                 .size(44.dp)
@@ -302,11 +311,44 @@ private fun AppCardHeader(app: AppEntry) {
                 color = AndoOnSurfaceMuted,
             )
         }
-        Box(
-            modifier = Modifier
-                .size(8.dp)
-                .clip(CircleShape)
-                .background(app.accent),
+        if (app.primaryAction != null) {
+            CardActionButton(app.primaryAction, app.accent)
+        } else {
+            Box(
+                modifier = Modifier
+                    .size(8.dp)
+                    .clip(CircleShape)
+                    .background(app.accent),
+            )
+        }
+    }
+}
+
+/** The card's top-right quick action — the one thing you'd most often do in that app. */
+@Composable
+private fun CardActionButton(action: CardAction, accent: Color) {
+    Row(
+        modifier = Modifier
+            .clip(RoundedCornerShape(12.dp))
+            .background(accent.copy(alpha = 0.16f))
+            .clickable { action.onClick() }
+            .padding(horizontal = 10.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            imageVector = action.icon,
+            contentDescription = action.label,
+            tint = accent,
+            modifier = Modifier.size(15.dp),
+        )
+        Text(
+            text = action.label,
+            style = MaterialTheme.typography.labelSmall,
+            color = accent,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(start = 5.dp),
         )
     }
 }
@@ -319,6 +361,7 @@ private fun RecentItemCard(item: RecentItem) {
             .fillMaxWidth()
             .clip(RoundedCornerShape(14.dp))
             .background(AndoSurface)
+            .then(if (item.onClick != null) Modifier.clickable { item.onClick.invoke() } else Modifier)
             .padding(10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -468,6 +511,7 @@ private fun GalleryItemCard(item: RecentItem) {
             .width(112.dp)
             .clip(RoundedCornerShape(14.dp))
             .background(AndoSurface)
+            .then(if (item.onClick != null) Modifier.clickable { item.onClick.invoke() } else Modifier)
             .padding(8.dp),
     ) {
         val bitmap: ImageBitmap? = item.thumbBitmap

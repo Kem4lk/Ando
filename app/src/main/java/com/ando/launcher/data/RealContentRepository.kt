@@ -2,6 +2,7 @@ package com.ando.launcher.data
 
 import android.Manifest
 import android.content.ContentUris
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
@@ -17,12 +18,26 @@ import android.os.StatFs
 import android.provider.CalendarContract
 import android.provider.CallLog
 import android.provider.MediaStore
+import android.provider.Settings
 import android.provider.Telephony
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.material.icons.filled.Call
+import androidx.compose.material.icons.filled.ChatBubble
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.OpenInNew
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Settings as SettingsIcon
+import androidx.compose.material.icons.filled.TrendingUp
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import com.ando.launcher.model.AppEntry
+import com.ando.launcher.model.CardAction
 import com.ando.launcher.model.RecentItem
 import com.ando.launcher.model.SourceKind
 import com.ando.launcher.notifications.CapturedNotification
@@ -45,7 +60,9 @@ val ALL_RUNTIME_PERMISSIONS: List<String> = buildList {
 /**
  * Turns real, on-device signals (installed apps' notifications, MediaStore, the call log,
  * SMS, the calendar, battery/storage/network) into the [AppEntry] list the launcher renders.
- * Nothing gathered here is written anywhere but this device.
+ * Nothing gathered here is written anywhere but this device. Every card and every row also
+ * carries a real click action — opening the app, the exact chat, the photo, the event, or the
+ * closest system screen for it.
  */
 class RealContentRepository(private val context: Context) {
 
@@ -78,21 +95,28 @@ class RealContentRepository(private val context: Context) {
     private fun buildNotificationEntry(entry: CatalogEntry, notifications: Map<String, List<CapturedNotification>>): AppEntry? {
         val installedPackage = entry.packageCandidates.firstOrNull { isInstalled(it) } ?: return null
         val (name, iconBitmap) = realAppIdentity(installedPackage, entry.fallbackName)
+        val openApp = { launchPackage(installedPackage) }
+        val primaryAction = notificationPrimaryAction(entry.id, installedPackage, openApp)
 
         if (!isNotificationAccessEnabled()) {
             return AppEntry(
                 id = entry.id, name = name, icon = entry.fallbackIcon, iconBitmap = iconBitmap,
                 accent = entry.accent, recentLabel = "Bildirim erişimi kapalı",
                 recent = emptyList(), source = entry.source, missingPermission = NOTIFICATION_ACCESS,
+                onOpen = openApp, primaryAction = primaryAction,
             )
         }
 
         val captured = notifications[installedPackage].orEmpty().sortedByDescending { it.whenMillis }
-        val items = captured.map {
+        val items = captured.map { notification ->
             RecentItem(
-                title = it.title.ifBlank { name },
-                subtitle = it.text,
-                meta = relativeTime(it.whenMillis),
+                title = notification.title.ifBlank { name },
+                subtitle = notification.text,
+                meta = relativeTime(notification.whenMillis),
+                onClick = {
+                    val opened = notification.contentIntent?.let { runCatching { it.send() }.isSuccess } ?: false
+                    if (!opened) openApp()
+                },
             )
         }
         return AppEntry(
@@ -100,7 +124,26 @@ class RealContentRepository(private val context: Context) {
             accent = entry.accent,
             recentLabel = if (items.isEmpty()) "Henüz bildirim yok" else "Son bildirimler",
             recent = items, source = entry.source,
+            onOpen = openApp, primaryAction = primaryAction,
         )
+    }
+
+    private fun notificationPrimaryAction(id: String, installedPackage: String, openApp: () -> Unit): CardAction = when (id) {
+        "mail" -> CardAction("Yeni e-posta", Icons.Filled.Edit) {
+            safeStart(Intent(Intent.ACTION_SENDTO, Uri.parse("mailto:")))
+        }
+        "maps" -> CardAction("Ara", Icons.Filled.Search) {
+            safeStart(Intent(Intent.ACTION_VIEW, Uri.parse("geo:0,0?q=")).apply { setPackage(installedPackage) })
+        }
+        "chrome" -> CardAction("Yeni sekme", Icons.Filled.Add) {
+            safeStart(Intent(Intent.ACTION_VIEW, Uri.parse("https://www.google.com")).apply { setPackage(installedPackage) })
+        }
+        "telegram", "whatsapp" -> CardAction("Sohbetler", Icons.Filled.ChatBubble, openApp)
+        "spotify" -> CardAction("Çal", Icons.Filled.PlayArrow, openApp)
+        "chatgpt" -> CardAction("Yeni sohbet", Icons.Filled.Add, openApp)
+        "reddit" -> CardAction("Gündem", Icons.Filled.TrendingUp, openApp)
+        "x" -> CardAction("Gönderiler", Icons.Filled.Home, openApp)
+        else -> CardAction("Aç", Icons.Filled.OpenInNew, openApp)
     }
 
     private fun isInstalled(packageName: String): Boolean = runCatching {
@@ -115,14 +158,26 @@ class RealContentRepository(private val context: Context) {
         label to icon
     }.getOrDefault(fallbackName to null)
 
+    private fun launchPackage(packageName: String) {
+        packageManager.getLaunchIntentForPackage(packageName)?.let { safeStart(it) }
+    }
+
+    private fun safeStart(intent: Intent) {
+        runCatching {
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(intent)
+        }
+    }
+
     // ---- MediaStore: Photos & Camera ----
 
     private val mediaPermission =
         if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_IMAGES else Manifest.permission.READ_EXTERNAL_STORAGE
 
     private fun buildMediaEntry(entry: CatalogEntry, cameraOnly: Boolean): AppEntry {
+        val captureAction = CardAction("Çek", Icons.Filled.CameraAlt) { openCameraCapture() }
         if (!hasPermission(mediaPermission)) {
-            return permissionNeededEntry(entry, mediaPermission)
+            return permissionNeededEntry(entry, mediaPermission, primaryAction = captureAction)
         }
         val items = mutableListOf<RecentItem>()
         val projection = arrayOf(
@@ -153,6 +208,14 @@ class RealContentRepository(private val context: Context) {
                         subtitle = cursor.getString(bucketCol) ?: "",
                         meta = relativeTime(cursor.getLong(dateCol) * 1000),
                         thumbBitmap = loadImageThumbnail(uri),
+                        onClick = {
+                            safeStart(
+                                Intent(Intent.ACTION_VIEW).apply {
+                                    setDataAndType(uri, "image/*")
+                                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                },
+                            )
+                        },
                     )
                 }
             }
@@ -162,7 +225,27 @@ class RealContentRepository(private val context: Context) {
             accent = entry.accent,
             recentLabel = if (items.isEmpty()) "Fotoğraf bulunamadı" else if (cameraOnly) "Son çekimler" else "Son eklenenler",
             recent = items, source = entry.source, isGallery = true,
+            onOpen = { safeStart(Intent(Intent.ACTION_VIEW, MediaStore.Images.Media.EXTERNAL_CONTENT_URI)) },
+            primaryAction = captureAction,
         )
+    }
+
+    /** Opens the camera app pointed at a fresh MediaStore entry, so the shot is actually saved. */
+    private fun openCameraCapture() {
+        runCatching {
+            val values = ContentValues().apply {
+                put(MediaStore.Images.Media.DISPLAY_NAME, "Ando_${System.currentTimeMillis()}.jpg")
+                put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+            }
+            val uri = context.contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+            val intent = Intent(MediaStore.ACTION_IMAGE_CAPTURE).apply {
+                if (uri != null) {
+                    putExtra(MediaStore.EXTRA_OUTPUT, uri)
+                    addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+                }
+            }
+            safeStart(intent)
+        }
     }
 
     private fun loadImageThumbnail(uri: Uri): ImageBitmap? = runCatching {
@@ -184,14 +267,26 @@ class RealContentRepository(private val context: Context) {
     // ---- Calendar ----
 
     private fun buildCalendarEntry(entry: CatalogEntry): AppEntry {
+        val addEventAction = CardAction("Ekle", Icons.Filled.Add) {
+            safeStart(Intent(Intent.ACTION_INSERT, CalendarContract.Events.CONTENT_URI))
+        }
+        val openCalendar = {
+            safeStart(
+                Intent(Intent.ACTION_VIEW).apply {
+                    data = CalendarContract.CONTENT_URI.buildUpon()
+                        .appendPath("time").appendPath(System.currentTimeMillis().toString()).build()
+                },
+            )
+        }
         if (!hasPermission(Manifest.permission.READ_CALENDAR)) {
-            return permissionNeededEntry(entry, Manifest.permission.READ_CALENDAR)
+            return permissionNeededEntry(entry, Manifest.permission.READ_CALENDAR, onOpen = openCalendar, primaryAction = addEventAction)
         }
         val now = System.currentTimeMillis()
         val weekAhead = now + TimeUnit.DAYS.toMillis(7)
         val instancesUri = CalendarContract.Instances.CONTENT_URI.buildUpon()
             .appendPath(now.toString()).appendPath(weekAhead.toString()).build()
         val projection = arrayOf(
+            CalendarContract.Instances.EVENT_ID,
             CalendarContract.Instances.TITLE,
             CalendarContract.Instances.BEGIN,
             CalendarContract.Instances.EVENT_LOCATION,
@@ -200,15 +295,21 @@ class RealContentRepository(private val context: Context) {
         runCatching {
             context.contentResolver.query(instancesUri, projection, null, null, "${CalendarContract.Instances.BEGIN} ASC")
                 ?.use { cursor ->
+                    val eventIdCol = cursor.getColumnIndexOrThrow(CalendarContract.Instances.EVENT_ID)
                     val titleCol = cursor.getColumnIndexOrThrow(CalendarContract.Instances.TITLE)
                     val beginCol = cursor.getColumnIndexOrThrow(CalendarContract.Instances.BEGIN)
                     val locationCol = cursor.getColumnIndexOrThrow(CalendarContract.Instances.EVENT_LOCATION)
                     while (cursor.moveToNext() && items.size < 6) {
                         val begin = cursor.getLong(beginCol)
+                        val eventId = cursor.getLong(eventIdCol)
                         items += RecentItem(
                             title = cursor.getString(titleCol) ?: "(başlıksız)",
                             subtitle = cursor.getString(locationCol) ?: "",
                             meta = relativeTime(begin, future = true),
+                            onClick = {
+                                val eventUri = ContentUris.withAppendedId(CalendarContract.Events.CONTENT_URI, eventId)
+                                safeStart(Intent(Intent.ACTION_VIEW, eventUri))
+                            },
                         )
                     }
                 }
@@ -217,14 +318,16 @@ class RealContentRepository(private val context: Context) {
             id = entry.id, name = entry.fallbackName, icon = entry.fallbackIcon, accent = entry.accent,
             recentLabel = if (items.isEmpty()) "Yaklaşan etkinlik yok" else "Yaklaşan",
             recent = items, source = entry.source,
+            onOpen = openCalendar, primaryAction = addEventAction,
         )
     }
 
     // ---- Call log ----
 
     private fun buildCallLogEntry(entry: CatalogEntry): AppEntry {
+        val dialAction = CardAction("Ara", Icons.Filled.Call) { safeStart(Intent(Intent.ACTION_DIAL)) }
         if (!hasPermission(Manifest.permission.READ_CALL_LOG)) {
-            return permissionNeededEntry(entry, Manifest.permission.READ_CALL_LOG)
+            return permissionNeededEntry(entry, Manifest.permission.READ_CALL_LOG, onOpen = dialAction.onClick, primaryAction = dialAction)
         }
         val items = mutableListOf<RecentItem>()
         runCatching {
@@ -244,6 +347,11 @@ class RealContentRepository(private val context: Context) {
                         title = name?.takeIf { it.isNotBlank() } ?: number ?: "Bilinmeyen",
                         subtitle = callTypeLabel(cursor.getInt(typeCol)),
                         meta = relativeTime(cursor.getLong(dateCol)),
+                        onClick = {
+                            if (!number.isNullOrBlank()) {
+                                safeStart(Intent(Intent.ACTION_DIAL, Uri.parse("tel:" + Uri.encode(number))))
+                            }
+                        },
                     )
                 }
             }
@@ -252,6 +360,7 @@ class RealContentRepository(private val context: Context) {
             id = entry.id, name = entry.fallbackName, icon = entry.fallbackIcon, accent = entry.accent,
             recentLabel = if (items.isEmpty()) "Arama geçmişi yok" else "Son aramalar",
             recent = items, source = entry.source,
+            onOpen = dialAction.onClick, primaryAction = dialAction,
         )
     }
 
@@ -267,8 +376,14 @@ class RealContentRepository(private val context: Context) {
     // ---- SMS ----
 
     private fun buildSmsEntry(entry: CatalogEntry): AppEntry {
+        val openMessaging = {
+            safeStart(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_APP_MESSAGING))
+        }
+        val newMessageAction = CardAction("Yeni", Icons.Filled.Edit) {
+            safeStart(Intent(Intent.ACTION_VIEW, Uri.parse("smsto:")))
+        }
         if (!hasPermission(Manifest.permission.READ_SMS)) {
-            return permissionNeededEntry(entry, Manifest.permission.READ_SMS)
+            return permissionNeededEntry(entry, Manifest.permission.READ_SMS, onOpen = openMessaging, primaryAction = newMessageAction)
         }
         val items = mutableListOf<RecentItem>()
         runCatching {
@@ -281,10 +396,16 @@ class RealContentRepository(private val context: Context) {
                 val bodyCol = cursor.getColumnIndexOrThrow(Telephony.Sms.BODY)
                 val dateCol = cursor.getColumnIndexOrThrow(Telephony.Sms.DATE)
                 while (cursor.moveToNext() && items.size < 6) {
+                    val address = cursor.getString(addressCol)
                     items += RecentItem(
-                        title = cursor.getString(addressCol) ?: "Bilinmeyen",
+                        title = address ?: "Bilinmeyen",
                         subtitle = cursor.getString(bodyCol) ?: "",
                         meta = relativeTime(cursor.getLong(dateCol)),
+                        onClick = {
+                            if (!address.isNullOrBlank()) {
+                                safeStart(Intent(Intent.ACTION_VIEW, Uri.parse("smsto:" + Uri.encode(address))))
+                            }
+                        },
                     )
                 }
             }
@@ -293,6 +414,7 @@ class RealContentRepository(private val context: Context) {
             id = entry.id, name = entry.fallbackName, icon = entry.fallbackIcon, accent = entry.accent,
             recentLabel = if (items.isEmpty()) "Mesaj yok" else "Son mesajlar",
             recent = items, source = entry.source,
+            onOpen = openMessaging, primaryAction = newMessageAction,
         )
     }
 
@@ -312,6 +434,7 @@ class RealContentRepository(private val context: Context) {
                     title = "Batarya",
                     subtitle = if (plugged) "Şarj oluyor" else "Şarjda değil",
                     meta = "%$percent",
+                    onClick = { safeStart(Intent(Settings.ACTION_BATTERY_SAVER_SETTINGS)) },
                 )
             }
         }
@@ -324,6 +447,7 @@ class RealContentRepository(private val context: Context) {
                 title = "Depolama",
                 subtitle = "%.1f GB boş / %.1f GB".format(freeGb, totalGb),
                 meta = "${(100 * stat.availableBytes / stat.totalBytes)}%",
+                onClick = { safeStart(Intent(Settings.ACTION_INTERNAL_STORAGE_SETTINGS)) },
             )
         }
 
@@ -336,21 +460,32 @@ class RealContentRepository(private val context: Context) {
                 caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "Mobil veri"
                 else -> "Bağlı"
             }
-            items += RecentItem(title = "Ağ", subtitle = network, meta = "canlı")
+            items += RecentItem(
+                title = "Ağ", subtitle = network, meta = "canlı",
+                onClick = { safeStart(Intent(Settings.ACTION_WIFI_SETTINGS)) },
+            )
         }
 
         return AppEntry(
             id = entry.id, name = entry.fallbackName, icon = entry.fallbackIcon, accent = entry.accent,
             recentLabel = "Cihaz durumu", recent = items, source = entry.source,
+            onOpen = { safeStart(Intent(Settings.ACTION_SETTINGS)) },
+            primaryAction = CardAction("Ayarlar", Icons.Filled.SettingsIcon) { safeStart(Intent(Settings.ACTION_SETTINGS)) },
         )
     }
 
     // ---- shared helpers ----
 
-    private fun permissionNeededEntry(entry: CatalogEntry, permission: String) = AppEntry(
+    private fun permissionNeededEntry(
+        entry: CatalogEntry,
+        permission: String,
+        onOpen: (() -> Unit)? = null,
+        primaryAction: CardAction? = null,
+    ) = AppEntry(
         id = entry.id, name = entry.fallbackName, icon = entry.fallbackIcon, accent = entry.accent,
         recentLabel = "İzin gerekli", recent = emptyList(), source = entry.source,
         missingPermission = permission, isGallery = entry.source == SourceKind.MEDIA_PHOTOS || entry.source == SourceKind.MEDIA_CAMERA,
+        onOpen = onOpen, primaryAction = primaryAction,
     )
 
     private fun relativeTime(millis: Long, future: Boolean = false): String {

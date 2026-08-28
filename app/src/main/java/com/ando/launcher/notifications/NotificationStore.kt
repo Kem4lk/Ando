@@ -1,5 +1,6 @@
 package com.ando.launcher.notifications
 
+import android.app.PendingIntent
 import android.content.Context
 import androidx.core.content.edit
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -12,6 +13,9 @@ data class CapturedNotification(
     val title: String,
     val text: String,
     val whenMillis: Long,
+    /** Tapping through to the exact chat/screen the notification pointed at — only ever set
+     *  for notifications captured live in this process, never restored from disk. */
+    val contentIntent: PendingIntent? = null,
 )
 
 /**
@@ -37,9 +41,19 @@ object NotificationStore {
         _byPackage.value = result
     }
 
-    fun record(context: Context, packageName: String, title: String, text: String, whenMillis: Long) {
+    fun record(
+        context: Context,
+        packageName: String,
+        title: String,
+        text: String,
+        whenMillis: Long,
+        contentIntent: PendingIntent? = null,
+    ) {
         if (title.isBlank() && text.isBlank()) return
-        val updated = (_byPackage.value[packageName].orEmpty() + CapturedNotification(title, text, whenMillis))
+        val updated = (
+            _byPackage.value[packageName].orEmpty() +
+                CapturedNotification(title, text, whenMillis, contentIntent)
+            )
             .sortedByDescending { it.whenMillis }
             .take(MAX_PER_PACKAGE)
         _byPackage.update { it + (packageName to updated) }
