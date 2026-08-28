@@ -1,9 +1,12 @@
 package com.ando.launcher
 
+import android.content.Intent
 import android.os.Bundle
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -29,102 +32,180 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.ando.launcher.data.DummyData
+import com.ando.launcher.data.ALL_RUNTIME_PERMISSIONS
+import com.ando.launcher.data.NOTIFICATION_ACCESS
+import com.ando.launcher.data.RealContentRepository
 import com.ando.launcher.model.AppEntry
 import com.ando.launcher.model.RecentItem
+import com.ando.launcher.notifications.NotificationStore
 import com.ando.launcher.ui.theme.AndoOnSurfaceMuted
 import com.ando.launcher.ui.theme.AndoSurface
 import com.ando.launcher.ui.theme.AndoSurfaceVariant
 import com.ando.launcher.ui.theme.AndoTheme
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 
 class MainActivity : ComponentActivity() {
+
+    private lateinit var repository: RealContentRepository
+    private val refreshTick = mutableStateOf(0)
+
+    private val permissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
+            refreshTick.value++
+        }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        repository = RealContentRepository(applicationContext)
+        NotificationStore.loadFromDisk(applicationContext)
+        permissionLauncher.launch(ALL_RUNTIME_PERMISSIONS.toTypedArray())
+
         setContent {
             AndoTheme {
-                LauncherScreen(apps = DummyData.apps)
+                val tick by refreshTick
+                val notificationSnapshot by NotificationStore.byPackage.collectAsState()
+                val apps = remember(tick, notificationSnapshot) { repository.buildApps() }
+                val notificationAccessEnabled = remember(tick, notificationSnapshot) {
+                    repository.isNotificationAccessEnabled()
+                }
+                LauncherScreen(
+                    apps = apps,
+                    showNotificationBanner = !notificationAccessEnabled,
+                    onGrantPermission = { permission -> requestPermission(permission) },
+                )
             }
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // Catches permissions or notification access toggled from Settings while we were away.
+        refreshTick.value++
+    }
+
+    private fun requestPermission(permission: String) {
+        if (permission == NOTIFICATION_ACCESS) {
+            startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
+        } else {
+            permissionLauncher.launch(arrayOf(permission))
         }
     }
 }
 
 @Composable
-fun LauncherScreen(apps: List<AppEntry>) {
+fun LauncherScreen(
+    apps: List<AppEntry>,
+    showNotificationBanner: Boolean,
+    onGrantPermission: (String) -> Unit,
+) {
     Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 24.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            item { ClockHeader() }
-            items(apps, key = { it.id }) { app -> AppCard(app) }
+            if (showNotificationBanner) {
+                item { NotificationAccessBanner(onEnable = { onGrantPermission(NOTIFICATION_ACCESS) }) }
+            }
+            items(apps, key = { it.id }) { app -> AppCard(app, onGrantPermission) }
             item { Box(Modifier.size(1.dp)) } // bottom breathing room
         }
     }
 }
 
 @Composable
-private fun ClockHeader() {
-    val now = remember { Date() }
-    val time = remember { SimpleDateFormat("HH:mm", Locale.getDefault()).format(now) }
-    val date = remember { SimpleDateFormat("EEEE, d MMMM", Locale.getDefault()).format(now) }
-    Column(modifier = Modifier.padding(bottom = 4.dp)) {
-        Text(text = time, style = MaterialTheme.typography.headlineLarge, color = MaterialTheme.colorScheme.onBackground)
-        Text(
-            text = date.replaceFirstChar { it.uppercase() },
-            style = MaterialTheme.typography.bodyMedium,
-            color = AndoOnSurfaceMuted,
-        )
+private fun NotificationAccessBanner(onEnable: () -> Unit) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onEnable() },
+        colors = CardDefaults.cardColors(containerColor = AndoSurfaceVariant),
+        shape = RoundedCornerShape(20.dp),
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                text = "Bildirim erişimi kapalı",
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Text(
+                text = "WhatsApp, Telegram, Spotify gibi uygulamalardan gelen bildirimleri göstermek için dokun ve aç.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = AndoOnSurfaceMuted,
+                modifier = Modifier.padding(top = 4.dp),
+            )
+        }
     }
 }
 
 @Composable
-private fun AppCard(app: AppEntry) {
-    var expanded by remember { mutableStateOf(true) }
+private fun AppCard(app: AppEntry, onGrantPermission: (String) -> Unit) {
     Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable { expanded = !expanded },
+        modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = AndoSurfaceVariant),
         shape = RoundedCornerShape(20.dp),
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             AppCardHeader(app)
-            if (expanded) {
-                if (app.isGallery) {
-                    LazyRow(
-                        modifier = Modifier.padding(top = 12.dp),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    ) {
-                        items(app.recent, key = { it.title }) { item -> GalleryItemCard(item) }
-                    }
-                } else {
-                    Column(
-                        modifier = Modifier.padding(top = 12.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        app.recent.forEach { item -> RecentItemCard(item) }
-                    }
+            when {
+                app.missingPermission != null -> GrantPermissionRow(
+                    modifier = Modifier.padding(top = 12.dp),
+                    onClick = { onGrantPermission(app.missingPermission) },
+                )
+                app.recent.isEmpty() -> Text(
+                    text = app.recentLabel,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = AndoOnSurfaceMuted,
+                    modifier = Modifier.padding(top = 12.dp),
+                )
+                app.isGallery -> LazyRow(
+                    modifier = Modifier.padding(top = 12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    items(app.recent, key = { it.title + it.meta }) { item -> GalleryItemCard(item) }
+                }
+                else -> Column(
+                    modifier = Modifier.padding(top = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    app.recent.forEach { item -> RecentItemCard(item) }
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun GrantPermissionRow(modifier: Modifier = Modifier, onClick: () -> Unit) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(AndoSurface)
+            .clickable { onClick() }
+            .padding(14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = "İzin ver",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.primary,
+            fontWeight = FontWeight.SemiBold,
+        )
     }
 }
 
@@ -138,13 +219,18 @@ private fun AppCardHeader(app: AppEntry) {
                 .background(app.accent.copy(alpha = 0.18f)),
             contentAlignment = Alignment.Center,
         ) {
-            Image(
-                painter = painterResource(id = app.icon),
-                contentDescription = app.name,
-                modifier = Modifier
-                    .size(30.dp)
-                    .clip(RoundedCornerShape(8.dp)),
-            )
+            when {
+                app.iconBitmap != null -> Image(
+                    bitmap = app.iconBitmap,
+                    contentDescription = app.name,
+                    modifier = Modifier.size(30.dp).clip(RoundedCornerShape(8.dp)),
+                )
+                app.icon != null -> Image(
+                    painter = painterResource(id = app.icon),
+                    contentDescription = app.name,
+                    modifier = Modifier.size(30.dp).clip(RoundedCornerShape(8.dp)),
+                )
+            }
         }
         Column(modifier = Modifier.padding(start = 12.dp).weight(1f)) {
             Text(
@@ -251,13 +337,22 @@ private fun GalleryItemCard(item: RecentItem) {
             .background(AndoSurface)
             .padding(8.dp),
     ) {
+        val bitmap: ImageBitmap? = item.thumbBitmap
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .aspectRatio(1f)
                 .clip(RoundedCornerShape(10.dp))
                 .background(item.thumbTint ?: AndoSurfaceVariant),
-        )
+        ) {
+            if (bitmap != null) {
+                Image(
+                    bitmap = bitmap,
+                    contentDescription = item.title,
+                    modifier = Modifier.fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(10.dp)),
+                )
+            }
+        }
         Column(modifier = Modifier.padding(top = 8.dp)) {
             Text(
                 text = item.title,
