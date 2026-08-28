@@ -2,8 +2,8 @@ package com.ando.launcher.notifications
 
 import android.app.Notification
 import android.content.ComponentName
+import android.media.MediaMetadata
 import android.media.session.MediaController
-import android.media.session.MediaMetadata
 import android.media.session.MediaSessionManager
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
